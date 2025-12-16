@@ -1,0 +1,236 @@
+(setf *package-for-evaluation* :cle)
+
+(in-package :cle)
+
+;; -------------------------------------
+;; + Utilities for running experiments +
+;; -------------------------------------
+
+(defun setup-experiment (dataset-name)
+  (defparameter *config*
+    (make-configuration
+     :entries `(;; setup data scene
+                (:dataset . ,dataset-name)
+                (:dataset-split . "train")
+                (:feature-set . ,dataset-name)
+                ;; monitoring
+                (:dot-interval . 100)
+                (:usage-table-window . 1000)
+                (:save-distribution-history . nil)
+                ;; setup interacting agents
+                (:interacting-agents-strategy . :standard)
+                (:population-size . 10)
+                ;; scene sampling
+                (:scene-sampling . :random)
+                (:topic-sampling . :random)
+                ;; entrenchment of constructions
+                (:initial-cxn-entrenchement . 0.5)
+                (:entrenchment-incf . 0.1)
+                (:entrenchment-decf . -0.1)
+                (:entrenchment-li . -0.02) ;; lateral inhibition
+                (:trash-concepts . t)
+                ;; distance measure
+                (:prototype-distance . :paper-wo-ledger)
+                (:similarity-threshold . 0.0)
+                ;; concept representations
+                (:concept-representation . :distribution)
+                (:distribution . :gaussian-welford)
+                (:M2 . 0.0001) ;; only for gaussian-welford
+                ;; prototype weight inits
+                (:weight-update-strategy . :j-interpolation)
+                (:initial-weight . 0)
+                (:weight-incf . 1)
+                (:weight-decf . -1)
+                ;; staging
+                (:switch-condition . :none)
+                (:switch-conditions-after-n-interactions . 2500)
+                (:stage-parameters nil)
+                ;; disable channels
+                (:disable-channels . :none)
+                (:amount-disabled-channels . 0)
+                ;; noised channels
+                (:sensor-noise . :none)
+                (:sensor-std . 0.0)
+                (:observation-noise . :none)
+                (:observation-std . 0.0)
+                ;; saving
+                (:exp-top-dir . "output")
+                (:exp-name . "experiment")
+                (:log-dir-name . ,dataset-name)
+                )))
+  (setf *experiment* (make-instance 'cle-experiment :configuration *config*))
+  (notify reset-monitors)
+  (activate-monitor export-communicative-success)
+  (activate-monitor export-lexicon-coherence)
+  (activate-monitor export-unique-form-usage)
+  (activate-monitor print-a-dot-for-each-interaction)
+  (wi::reset))
+
+(defun setup-train ()
+  (set-configuration *experiment* :dataset-split "train")
+  (set-configuration *experiment* :align t)
+  (initialise-world *experiment*))
+
+(defun setup-test ()
+  (set-configuration *experiment* :dataset-split "test")
+  (set-configuration *experiment* :align nil)
+  (initialise-world *experiment*))
+
+(defun test-experiment (games)
+  (set-seed nil) ;; reset the random-state to a random seed
+
+  ;; reset usage tables
+  (loop for agent in (agents *experiment*)
+        do (setf (usage-table agent) (create-usage-table nil)))
+  ;; set-up monitors
+  (notify reset-monitors)
+  (activate-monitor export-communicative-success)
+  (activate-monitor export-lexicon-coherence)
+  (activate-monitor export-unique-form-usage)
+  (activate-monitor print-a-dot-for-each-interaction)
+  (wi::reset)
+  (format t "~%---------- TESTING ON TEST SET ----------~%")
+  (time
+   (loop for i from 1 to games
+         do (run-interaction *experiment*)))
+  (notify reset-monitors))
+
+;; -------------
+;; + Overwrite +
+;; -------------
+
+(defmethod initialize-instance :around ((world world) &key
+                                        dataset-name
+                                        dataset-split
+                                        feature-set
+                                        scene-sampling
+                                        (data-fname nil))
+  "Initializes the world by loading the dataset."
+  ;; initialize the instance (so that experiment slot is set)
+  (call-next-method)
+ 
+  ;; load the scenes
+  (let ((fpath (merge-pathnames (make-pathname :directory `(:relative ,dataset-name "scenes" ,dataset-split))
+                                cl-user:*babel-corpora*)))
+    (unless (probe-file fpath)
+      (error "Could not find a 'scenes' subdirectory in ~a~%" fpath))
+    ;; set the scenes (sorted by name)
+    (setf (slot-value world 'scene-fpaths)
+          (sort (directory (make-pathname :directory (pathname-directory fpath)
+                                          :name :wild :type "json"))
+                #'string< :key #'namestring)))
+  
+  ;; set the available channels
+  (let* ((info-path (merge-pathnames (make-pathname :directory `(:relative ,dataset-name)
+                                                    :name (format nil "~a_meta" feature-set)
+                                                    :type "csv")
+                                     cl-user:*babel-corpora*))
+         (csv (read-csv info-path)))
+    (loop for row in csv
+          for channel = (intern (upcase (first row)))
+          for type = (intern (upcase (second row)))
+          for symbolic-attribute = (parse-keyword (third row))
+          do (setf (slot-value world 'feature-set)
+                   (cons channel (slot-value world 'feature-set)))
+          do (setf (gethash channel (slot-value world 'channel-type))
+                   type)
+          do (setf (gethash channel (slot-value world 'symbolic-attribute))
+                   symbolic-attribute))))
+;; ------------
+;; + Monitors +
+;; ------------
+
+(defun show-scene (world split context topic)
+  (add-element `((table :style ,(format nil "margin-left: 50px;"))
+                 ((tr) ((td) ,(make-html context
+                                         :topic (id topic)
+                                         :world world
+                                         :expand-initially t))))))
+
+;; -----------------
+;; + Printing dots +
+;; -----------------
+(defvar *start-time* nil)
+
+(define-monitor print-a-dot-for-each-interaction
+                :documentation "Prints a '.' for each interaction
+                 and prints the number after :dot-interval")
+  
+(define-event-handler (print-a-dot-for-each-interaction interaction-finished)
+                      (cond ((or (= (interaction-number interaction) 1) (not *start-time*))
+                             (setf *start-time* (get-universal-time)))
+                            ((= (mod (interaction-number interaction)
+                                     (get-configuration experiment :dot-interval)) 0)
+                             (let ((comm-success (caaar (monitors::get-average-values (monitors::get-monitor 'record-communicative-success))))
+                                   (coherence (caaar (monitors::get-average-values (monitors::get-monitor 'record-lexicon-coherence)))))
+                               (multiple-value-bind (h m s) (seconds-to-hours-minutes-seconds (- (get-universal-time) *start-time*))
+                                 (format t
+                                         ". (~a / ~a / ~a / ~ah ~am ~as)~%"
+                                         (interaction-number interaction)
+                                         (if comm-success
+                                           (format nil "~,vf%" 1 (* 100 (float comm-success)))
+                                           "NIL")
+                                         (if coherence
+                                           (format nil "~,vf%" 1 (* 100 (float coherence)))
+                                           "NIL")
+                                         h m s)))
+                             (setf *start-time* (get-universal-time)))))
+
+;; -------------------------
+;; + Communicative success +
+;; -------------------------
+(define-monitor record-communicative-success
+                :class 'data-recorder
+                :average-window 1000
+                :documentation "Records the game outcome of each game (1 or 0).")
+
+(define-monitor export-communicative-success
+                :class 'csv-data-file-writer
+                :documentation "Exports communicative success."
+                :data-sources '(record-communicative-success)
+                :file-name (babel-pathname :name "communicative-success" :type "csv"
+                                           :directory '("logging"))
+                :add-time-and-experiment-to-file-name nil)
+
+(define-event-handler (record-communicative-success interaction-finished)
+  (record-value monitor (if (communicated-successfully interaction) 1 0)))
+
+;; ---------------------
+;; + Lexicon Coherence +
+;; ---------------------
+(define-monitor record-lexicon-coherence
+                :class 'data-recorder
+                :average-window 1000
+                :documentation "Records the lexicon coherence.")
+
+(define-monitor export-lexicon-coherence
+                :class 'csv-data-file-writer
+                :documentation "Exports lexicon size."
+                :data-sources '(record-lexicon-coherence)
+                :file-name (babel-pathname :name "lexicon-coherence" :type "csv"
+                                           :directory '("logging"))
+                :add-time-and-experiment-to-file-name nil)
+
+(define-event-handler (record-lexicon-coherence interaction-finished)
+  (record-value monitor (if (find-data interaction 'lexicon-coherence) 1 0)))
+
+;; ---------------------
+;; + Unique form usage +
+;; ---------------------
+(define-monitor record-unique-form-usage
+                :class 'data-recorder
+                :average-window 0
+                :documentation "Records the unique form usage.")
+
+(define-monitor export-unique-form-usage
+                :class 'csv-data-file-writer
+                :documentation "Exports the unique form usage"
+                :data-sources '(record-unique-form-usage)
+                :file-name (babel-pathname :name "unique-form-usage" :type "csv"
+                                           :directory '("logging"))
+                :add-time-and-experiment-to-file-name nil)
+
+(define-event-handler (record-unique-form-usage interaction-finished)
+  (record-value monitor (loop for agent in (agents (experiment interaction))
+                              sum (unique-forms-in-window agent) into total-sum
+                              finally (return (round (/ total-sum (length (agents (experiment interaction)))))))))

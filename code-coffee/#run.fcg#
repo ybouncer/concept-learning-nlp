@@ -1,0 +1,65 @@
+(in-package :cle)
+
+;; ------------------------------------------
+;; + Setting up the path to the dataset !!! +
+;; ------------------------------------------
+
+;; ==== !!! UPDATE the variable cl-user:*babel-corpora*  <=== !!! =====
+
+;; STEP 1: change the path to `datasets` folder
+;; Make sure to
+;;    a. Save the directory locally (we had issues with paths to OneDrive/Dropboxes etc...)
+;;    b. On Windows: separate folders using '\\', on Mac and Linux use '/'
+;;    c. Do not forget the `/` at the end of your path (indicates that 'datasets' is a directory and not a file)!
+
+;; FOR WINDOWS - Update this path to your location:
+(setf cl-user:*babel-corpora* #P"C:\\Users\\yboun\\Downloads\\grounded_naming_game\\grounded_naming_game 2\\code-coffee\\datasets\\")
+
+;; FOR MAC/LINUX - Example:
+;;(setf cl-user:*babel-corpora* #P"/Users/your-name/path-to/code-coffee/datasets/")
+
+;; ------------
+;; + TRAINING +
+;; ------------
+
+;; STEP 1: setup the experiment with COFFEE dataset
+(setup-experiment "coffee")
+
+;; STEP 2: activate alignment (learning mode)
+(setup-train)
+
+;; STEP 3: run 100,000 training interactions
+;; TIP: Start with 1,000 interactions for testing, then increase to 100,000
+(loop for i from 1 to 100000
+      do (run-interaction *experiment*))
+
+;; ------------
+;; + TESTING +
+;; ------------
+
+;; STEP 1: reset monitors
+(notify reset-monitors)
+
+;; STEP 2: deactivate alignment (testing mode - no learning)
+(setup-test)
+
+;; STEP 3: run 10,000 test interactions
+(loop for i from 1 to 10000
+      do (run-interaction *experiment*))
+
+;; -------------------
+;; + useful commands +
+;; -------------------
+
+;; displays all emergent conventions of an agent
+;;    agent - first agent of the experiment
+;;    (optional) weight-threshold (float) - threshold on weight before the sensor/channel is shown
+;;    (optional) sort (bool) - whether to sort the lexicon by entrenchment score
+(display-lexicon (first (agents *experiment*)) :weight-threshold 0.1 :sort t)
+
+;; activates the web-interface (when running a limited set of games)
+(activate-monitor trace-interaction-in-web-interface)
+;; deactivates the web-interface (when running a large amount of games)
+(deactivate-monitor trace-interaction-in-web-interface)
+;; clears the web-interface
+;;(wi::reset)

@@ -1,0 +1,12 @@
+channel,type,symbolic-attribute
+Aroma,continuous,nil
+Flavor,continuous,nil
+Aftertaste,continuous,nil
+Acidity,continuous,nil
+Body,continuous,nil
+Balance,continuous,nil
+Uniformity,continuous,nil
+Clean-Cup,continuous,nil
+Sweetness,continuous,nil
+Moisture,continuous,nil
+altitude-mean-meters,continuous,nil
